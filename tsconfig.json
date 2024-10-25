@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "es2015", // Change to 'es6' or higher if needed
+    "module": "commonjs", // CommonJS for Node.js
+    "outDir": "./dist", // Output directory for compiled files
+    "rootDir": "./src", // Root directory for source files
+    "strict": true, // Enable strict type checking
+    "esModuleInterop": true, // Enable interop for CommonJS modules
+    "declaration": true,
+    "declarationDir": "dist/types",
+    "moduleResolution": "Node"
+  },
+  "include": ["src/**/*"], // Include all TypeScript files in the 'src' directory
+  "exclude": ["node_modules"] // Exclude 'node_modules' from compilation
+}
