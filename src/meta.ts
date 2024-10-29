@@ -89,19 +89,22 @@ async function setPageViewPort(page: Page) {
     });
 }
 export class KauflandBot implements IBot {
-    async handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
-        const { browser, task } = context;
-        console.info(`before newPage`);
-        const page = await browser.newPage();
-        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // TEST: To see page log
-
+    task!: IKauflandRankingTask;
+    mainPage!: Page;
+    browser!: Browser;
+    taskResult!: IKauflandRankingTaskResult;
+    getBaseUrl() {
         // Main Step3: Country Assertion: Verify the correct country (e.g., kaufland.de, kaufland.nl).
-        const baseUrl = `https://www.kaufland.${task.location}`;
-        console.info(`${baseUrl} is loading...`);
-        await page.goto(baseUrl);
-        console.info(`${baseUrl} is loaded`);
+        return `https://www.kaufland.${this.task.location}`;
+    }
+    async newBasePage() {
+        const page = await this.browser.newPage();
+        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // TEST: To see page log
+        await page?.goto(this.getBaseUrl());
         await setPageViewPort(page);
-
+        return page;
+    }
+    hideCookieAlertIfItAppears(page: Page = this.mainPage) {
         // Click Cookie Accept Button if the alert is displayed
         page.locator('#onetrust-accept-btn-handler')
             //.setTimeout(100)
@@ -119,7 +122,8 @@ export class KauflandBot implements IBot {
                     console.info('Cookie alert is not displayed');
                 else console.error('Unknown error: ' + error);
             });
-
+    }
+    async checkProfile(page: Page = this.mainPage) {
         // Main Step2: Profile Check
         const accountLogin: ElementHandle = await Promise.race([
             page.locator('.rd-aw-login-entry>button').waitHandle(),
@@ -130,7 +134,7 @@ export class KauflandBot implements IBot {
             el.tagName.toLowerCase()
         );
         const isLoggedIn = tagName === 'button';
-        if (task.isAnonymous) {
+        if (this.task.isAnonymous) {
             if (isLoggedIn) {
                 console.error(
                     'Profie Mismatch:  Anonymous user is expected but profile is logged in'
@@ -145,49 +149,41 @@ export class KauflandBot implements IBot {
                 console.info('Profile is logged in');
             }
         }
-
+    }
+    async getCartCount() {
         // Main Step4: Retrieve Cart Count: Count the products in the cart before starting.
-        // TEST: Skip CartCount
-        /* 
-        const cartCount = await (async () => {
-            const cartPage = await browser.newPage();
-            await setPageViewPort(cartPage);
-            await cartPage.goto(`${baseUrl}/checkout/cart`);
-            const cartHandle: ElementHandle = await Promise.race([
-                cartPage.locator('.empty-cart').waitHandle(),
-                cartPage.locator('.filled-cart .article-counter').waitHandle(),
-            ]);
-            const cartClassName = await cartHandle.evaluate(
-                (el) => el.className
+        const cartPage = await this.browser.newPage();
+        await setPageViewPort(cartPage);
+        await cartPage.goto(`${this.getBaseUrl()}/checkout/cart`);
+        const cartHandle: ElementHandle = await Promise.race([
+            cartPage.locator('.empty-cart').waitHandle(),
+            cartPage.locator('.filled-cart .article-counter').waitHandle(),
+        ]);
+        const cartClassName = await cartHandle.evaluate((el) => el.className);
+        let cartCount = 0;
+        if (cartClassName !== 'empty-cart') {
+            const textContent = await cartHandle.evaluate(
+                (el) => el.textContent
             );
-            let cartCount = 0;
-            if (cartClassName !== 'empty-cart') {
-                const textContent = await cartHandle.evaluate(
-                    (el) => el.textContent
+            if (textContent === null) {
+                console.error('TextContent of cart article should not be null');
+            } else {
+                cartCount = Number(
+                    textContent
+                        .replace('(', '')
+                        .replace(')', '')
+                        .trim()
+                        .split(' ')[0]
                 );
-                if (textContent === null) {
-                    console.error(
-                        'TextContent of cart article should not be null'
-                    );
-                } else {
-                    cartCount = Number(
-                        textContent
-                            .replace('(', '')
-                            .replace(')', '')
-                            .trim()
-                            .split(' ')[0]
-                    );
-                }
             }
-            await cartPage.close();
-            return cartCount;
-        })();
-        console.info('Cart Count:', cartCount); 
-        */
-
+        }
+        await cartPage.close();
+        return cartCount;
+    }
+    async inputSearchFilters(page: Page = this.mainPage) {
         // Step5: Input Search Criteria: Enter the keyword and other search filter values.
         const { keyword, minPrice, maxPrice } =
-            task.productAction.searchCriteria;
+            this.task.productAction.searchCriteria;
         const searchInputHandle = await page
             .locator('input.rh-search__input')
             .waitHandle();
@@ -214,7 +210,10 @@ export class KauflandBot implements IBot {
                 await elements[1].type(maxPrice.toString());
             await elements[1].press('Enter');
         }
-
+    }
+    async validateInputFilers(page: Page = this.mainPage) {
+        const { keyword, minPrice, maxPrice } =
+            this.task.productAction.searchCriteria;
         // Step6. Validate Filters: Assert that all filter data is correctly input and reflected in the result pages.
         const inputedSearchFilter = await page
             .locator('input.rh-search__input')
@@ -262,12 +261,38 @@ export class KauflandBot implements IBot {
                 );
             }
         }
-        // TEST: Wait Long Time
+    }
+    async handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
+        // Init Properties
+        this.task = context.task;
+        this.taskResult = {
+            isFoundVariationId: false,
+            foundBySearch: false,
 
-        await page.waitForNavigation({
+            cart: {
+                itemsCountBefore: 0,
+                itemsCountAfter: 0,
+            },
+            mainProductPageActions: {
+                productId: '',
+            },
+            otherProducts: [],
+        };
+        this.browser = context.browser;
+        this.mainPage = await this.newBasePage();
+
+        // Actions
+        this.hideCookieAlertIfItAppears();
+        await this.checkProfile();
+        this.taskResult.cart.itemsCountBefore = await this.getCartCount();
+        console.log('Cart Count:', this.taskResult.cart.itemsCountBefore);
+        await this.inputSearchFilters();
+        await this.validateInputFilers();
+
+        // TEST: Wait Long Time
+        await this.mainPage.waitForNavigation({
             timeout: 5 * 60 * 1000 /* 5 mins */,
         });
-        await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
         return {} as any;
     }
 }
