@@ -188,10 +188,10 @@ export class KauflandBot implements IBot {
         // Step5: Input Search Criteria: Enter the keyword and other search filter values.
         const { keyword, minPrice, maxPrice } =
             task.productAction.searchCriteria;
-        await page.locator('input.rh-search__input').fill(keyword);
         const searchInputHandle = await page
             .locator('input.rh-search__input')
             .waitHandle();
+        await searchInputHandle.type(keyword);
         await searchInputHandle.press('Enter');
         console.info('search input is filled and entered');
 
@@ -215,8 +215,58 @@ export class KauflandBot implements IBot {
             await elements[1].press('Enter');
         }
 
+        // Step6. Validate Filters: Assert that all filter data is correctly input and reflected in the result pages.
+        const inputedSearchFilter = await page
+            .locator('input.rh-search__input')
+            .map((input: HTMLInputElement) => input.value)
+            .wait();
+        if (inputedSearchFilter === keyword)
+            console.info(`${keyword} is inputed to search filter`);
+        else {
+            console.error(
+                `${keyword} is NOT inputed to search filter: ` +
+                    inputedSearchFilter
+            );
+        }
+
+        if (minPrice !== undefined) {
+            const inputedMinValueFilter = await page
+                .locator(
+                    '.range-filter__input:nth-of-type(1) input.rd-input__input'
+                )
+                .map((input: HTMLInputElement) => input.value)
+                .wait();
+            if (minPrice === Number(inputedMinValueFilter)) {
+                console.info(`${minPrice} is inputed to search filter`);
+            } else {
+                console.error(
+                    `${minPrice} is NOT inputed to search filter: ` +
+                        inputedMinValueFilter
+                );
+            }
+        }
+
+        if (maxPrice !== undefined) {
+            const inputedMaxValueFilter = await page
+                .locator(
+                    '.range-filter__input:nth-of-type(2) input.rd-input__input'
+                )
+                .map((input: HTMLInputElement) => input.value)
+                .wait();
+            if (maxPrice === Number(inputedMaxValueFilter)) {
+                console.info(`${maxPrice} is inputed to search filter`);
+            } else {
+                console.error(
+                    `${maxPrice} is NOT inputed to search filter: ` +
+                        inputedMaxValueFilter
+                );
+            }
+        }
         // TEST: Wait Long Time
-        await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
+
+        await page.waitForNavigation({
+            timeout: 5 * 60 * 1000 /* 5 mins */,
+        });
         await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
         return {} as any;
     }
