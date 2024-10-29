@@ -1,9 +1,4 @@
-import puppeteer, {
-    Browser,
-    ElementHandle,
-    Page,
-    TimeoutError,
-} from 'puppeteer';
+import { Browser, ElementHandle, Page, TimeoutError } from 'puppeteer';
 
 export interface IProductInfo {
     // information about target product
@@ -98,7 +93,8 @@ export class KauflandBot implements IBot {
         const { browser, task } = context;
         console.info(`before newPage`);
         const page = await browser.newPage();
-        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // To see page log
+        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // TEST: To see page log
+
         // Main Step3: Country Assertion: Verify the correct country (e.g., kaufland.de, kaufland.nl).
         const baseUrl = `https://www.kaufland.${task.location}`;
         console.info(`${baseUrl} is loading...`);
@@ -151,6 +147,8 @@ export class KauflandBot implements IBot {
         }
 
         // Main Step4: Retrieve Cart Count: Count the products in the cart before starting.
+        // TEST: Skip CartCount
+        /* 
         const cartCount = await (async () => {
             const cartPage = await browser.newPage();
             await setPageViewPort(cartPage);
@@ -184,7 +182,41 @@ export class KauflandBot implements IBot {
             await cartPage.close();
             return cartCount;
         })();
-        console.info('Cart Count:', cartCount);
+        console.info('Cart Count:', cartCount); 
+        */
+
+        // Step5: Input Search Criteria: Enter the keyword and other search filter values.
+        const { keyword, minPrice, maxPrice } =
+            task.productAction.searchCriteria;
+        await page.locator('input.rh-search__input').fill(keyword);
+        const searchInputHandle = await page
+            .locator('input.rh-search__input')
+            .waitHandle();
+        await searchInputHandle.press('Enter');
+        console.info('search input is filled and entered');
+
+        await page.waitForFunction(
+            () =>
+                document.querySelectorAll(
+                    '.range-filter__input input.rd-input__input'
+                ).length === 2
+        );
+
+        if (minPrice !== undefined || maxPrice !== undefined) {
+            const elements = await page.$$(
+                '.range-filter__input input.rd-input__input'
+            );
+
+            // Fill values into the elements
+            if (minPrice !== undefined)
+                await elements[0].type(minPrice.toString());
+            if (maxPrice !== undefined)
+                await elements[1].type(maxPrice.toString());
+            await elements[1].press('Enter');
+        }
+
+        // TEST: Wait Long Time
+        await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
         await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
         return {} as any;
     }
