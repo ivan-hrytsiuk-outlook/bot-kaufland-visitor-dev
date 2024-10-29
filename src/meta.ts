@@ -1,4 +1,9 @@
-import {Browser} from 'puppeteer';
+import puppeteer, {
+    Browser,
+    ElementHandle,
+    Page,
+    TimeoutError,
+} from 'puppeteer';
 
 export interface IProductInfo {
     // information about target product
@@ -80,10 +85,107 @@ export interface IBot {
     // handle(context: IBotContext): Promise<IKauflandRankingTaskResult>;
     handle(context: IBotContext): Promise<IKauflandRankingTaskResult>;
 }
-
-
+async function setPageViewPort(page: Page) {
+    return page.setViewport({
+        width: 1366,
+        height: 768,
+        deviceScaleFactor: 1,
+        isMobile: false,
+    });
+}
 export class KauflandBot implements IBot {
-    handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
+    async handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
+        const { browser, task } = context;
+        console.info(`before newPage`);
+        const page = await browser.newPage();
+        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // To see page log
+        // Main Step3: Country Assertion: Verify the correct country (e.g., kaufland.de, kaufland.nl).
+        const baseUrl = `https://www.kaufland.${task.location}`;
+        console.info(`${baseUrl} is loading...`);
+        await page.goto(baseUrl);
+        console.info(`${baseUrl} is loaded`);
+        await setPageViewPort(page);
+
+        // Click Cookie Accept Button if the alert is displayed
+        page.locator('#onetrust-accept-btn-handler')
+            //.setTimeout(100)
+            .waitHandle()
+            .then(async (acceptBtn) => {
+                if (!acceptBtn) {
+                    throw new Error('Null accept Btn');
+                }
+                console.info('Cookie alert is shown', acceptBtn);
+                await acceptBtn.click();
+                console.info('Cookie Accept button is clicked', acceptBtn);
+            })
+            .catch((error) => {
+                if (error instanceof TimeoutError)
+                    console.info('Cookie alert is not displayed');
+                else console.error('Unknown error: ' + error);
+            });
+
+        // Main Step2: Profile Check
+        const accountLogin: ElementHandle = await Promise.race([
+            page.locator('.rd-aw-login-entry>button').waitHandle(),
+            page.locator('.rd-aw-login-entry>a').waitHandle(),
+            page.locator('.rd-aw-login-entry>span').waitHandle(),
+        ]);
+        const tagName = await accountLogin.evaluate((el) =>
+            el.tagName.toLowerCase()
+        );
+        const isLoggedIn = tagName === 'button';
+        if (task.isAnonymous) {
+            if (isLoggedIn) {
+                console.error(
+                    'Profie Mismatch:  Anonymous user is expected but profile is logged in'
+                );
+            } else {
+                console.info('Anonymouse profile matched');
+            }
+        } else {
+            if (!isLoggedIn) {
+                console.error('profile Mismatch:  Profile should be logged in');
+            } else {
+                console.info('Profile is logged in');
+            }
+        }
+
+        // Main Step4: Retrieve Cart Count: Count the products in the cart before starting.
+        const cartCount = await (async () => {
+            const cartPage = await browser.newPage();
+            await setPageViewPort(cartPage);
+            await cartPage.goto(`${baseUrl}/checkout/cart`);
+            const cartHandle: ElementHandle = await Promise.race([
+                cartPage.locator('.empty-cart').waitHandle(),
+                cartPage.locator('.filled-cart .article-counter').waitHandle(),
+            ]);
+            const cartClassName = await cartHandle.evaluate(
+                (el) => el.className
+            );
+            let cartCount = 0;
+            if (cartClassName !== 'empty-cart') {
+                const textContent = await cartHandle.evaluate(
+                    (el) => el.textContent
+                );
+                if (textContent === null) {
+                    console.error(
+                        'TextContent of cart article should not be null'
+                    );
+                } else {
+                    cartCount = Number(
+                        textContent
+                            .replace('(', '')
+                            .replace(')', '')
+                            .trim()
+                            .split(' ')[0]
+                    );
+                }
+            }
+            await cartPage.close();
+            return cartCount;
+        })();
+        console.info('Cart Count:', cartCount);
+        await page.waitForNavigation({ timeout: 5 * 60 * 1000 /* 5 mins */ });
         return {} as any;
     }
 }
