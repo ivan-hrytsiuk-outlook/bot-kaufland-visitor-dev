@@ -1,4 +1,4 @@
-import { Browser, ElementHandle, Page, TimeoutError } from 'puppeteer';
+import { Browser, ElementHandle, Locator, Page, TimeoutError } from 'puppeteer';
 
 export interface IProductInfo {
     // information about target product
@@ -58,6 +58,7 @@ export interface IKauflandRankingTaskResult {
     foundId?: string; // ID of main product or its variation that was found
     isFoundVariationId: boolean; // true if  ID of main product was found. false if variation ID was found.
     foundBySearch: boolean; // true if main product or its variation was found with normal search
+    isFoundAdvertised: boolean;
 
     cart: {
         itemsCountBefore: number;
@@ -88,6 +89,10 @@ async function setPageViewPort(page: Page) {
         isMobile: false,
     });
 }
+const debugLog = (msg: string) => console.log('\x1b[34m', msg, '\x1b[0m'); // blue log
+const infoLog = (msg: string) => console.log('\x1b[32m', msg, '\x1b[0m'); // green log
+const sleep = (delay: number) =>
+    new Promise((resolve) => setTimeout(resolve, delay));
 export class KauflandBot implements IBot {
     task!: IKauflandRankingTask;
     mainPage!: Page;
@@ -99,12 +104,13 @@ export class KauflandBot implements IBot {
     }
     async newBasePage() {
         const page = await this.browser.newPage();
-        page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // TEST: To see page log
+        // page.on('console', (msg) => console.log('PAGE LOG:', msg.text())); // TEST: To see page log
         await page?.goto(this.getBaseUrl());
         await setPageViewPort(page);
         return page;
     }
-    hideCookieAlertIfItAppears(page: Page = this.mainPage) {
+    hideCookieAlertIfItAppears() {
+        const page = this.mainPage;
         // Click Cookie Accept Button if the alert is displayed
         page.locator('#onetrust-accept-btn-handler')
             //.setTimeout(100)
@@ -113,17 +119,18 @@ export class KauflandBot implements IBot {
                 if (!acceptBtn) {
                     throw new Error('Null accept Btn');
                 }
-                console.info('Cookie alert is shown', acceptBtn);
+                infoLog('Cookie alert is shown');
                 await acceptBtn.click();
-                console.info('Cookie Accept button is clicked', acceptBtn);
+                infoLog('Cookie Accept button is clicked');
             })
             .catch((error) => {
                 if (error instanceof TimeoutError)
-                    console.info('Cookie alert is not displayed');
+                    infoLog('Cookie alert is not displayed');
                 else console.error('Unknown error: ' + error);
             });
     }
-    async checkProfile(page: Page = this.mainPage) {
+    async checkProfile() {
+        const page = this.mainPage;
         // Main Step2: Profile Check
         const accountLogin: ElementHandle = await Promise.race([
             page.locator('.rd-aw-login-entry>button').waitHandle(),
@@ -140,13 +147,13 @@ export class KauflandBot implements IBot {
                     'Profie Mismatch:  Anonymous user is expected but profile is logged in'
                 );
             } else {
-                console.info('Anonymouse profile matched');
+                infoLog('Anonymouse profile matched');
             }
         } else {
             if (!isLoggedIn) {
                 console.error('profile Mismatch:  Profile should be logged in');
             } else {
-                console.info('Profile is logged in');
+                infoLog('Profile is logged in');
             }
         }
     }
@@ -180,7 +187,8 @@ export class KauflandBot implements IBot {
         await cartPage.close();
         return cartCount;
     }
-    async inputSearchFilters(page: Page = this.mainPage) {
+    async inputSearchFilters() {
+        const page = this.mainPage;
         // Step5: Input Search Criteria: Enter the keyword and other search filter values.
         const { keyword, minPrice, maxPrice } =
             this.task.productAction.searchCriteria;
@@ -189,7 +197,7 @@ export class KauflandBot implements IBot {
             .waitHandle();
         await searchInputHandle.type(keyword);
         await searchInputHandle.press('Enter');
-        console.info('search input is filled and entered');
+        infoLog('search input is filled and entered');
 
         await page.waitForFunction(
             () =>
@@ -210,17 +218,14 @@ export class KauflandBot implements IBot {
                 await elements[1].type(maxPrice.toString());
             await elements[1].press('Enter');
         }
-    }
-    async validateInputFilers(page: Page = this.mainPage) {
-        const { keyword, minPrice, maxPrice } =
-            this.task.productAction.searchCriteria;
+
         // Step6. Validate Filters: Assert that all filter data is correctly input and reflected in the result pages.
         const inputedSearchFilter = await page
             .locator('input.rh-search__input')
             .map((input: HTMLInputElement) => input.value)
             .wait();
         if (inputedSearchFilter === keyword)
-            console.info(`${keyword} is inputed to search filter`);
+            infoLog(`${keyword} is inputed to search filter`);
         else {
             console.error(
                 `${keyword} is NOT inputed to search filter: ` +
@@ -236,7 +241,7 @@ export class KauflandBot implements IBot {
                 .map((input: HTMLInputElement) => input.value)
                 .wait();
             if (minPrice === Number(inputedMinValueFilter)) {
-                console.info(`${minPrice} is inputed to search filter`);
+                infoLog(`${minPrice} is inputed to search filter`);
             } else {
                 console.error(
                     `${minPrice} is NOT inputed to search filter: ` +
@@ -253,7 +258,7 @@ export class KauflandBot implements IBot {
                 .map((input: HTMLInputElement) => input.value)
                 .wait();
             if (maxPrice === Number(inputedMaxValueFilter)) {
-                console.info(`${maxPrice} is inputed to search filter`);
+                infoLog(`${maxPrice} is inputed to search filter`);
             } else {
                 console.error(
                     `${maxPrice} is NOT inputed to search filter: ` +
@@ -261,13 +266,222 @@ export class KauflandBot implements IBot {
                 );
             }
         }
+
+        const searchedHandle = await Locator.race([
+            page
+                .locator('.product-count.result-header__product-count')
+                .filter((el) => el.textContent?.trim() !== ''),
+            page.locator('.empty-search__notification'),
+        ]).waitHandle();
+
+        if (
+            await searchInputHandle.evaluate((el) =>
+                el.classList.contains('empty-search__notification')
+            )
+        ) {
+            console.error('Any matching search results');
+            this.taskResult.totalResultItems = 0;
+            this.taskResult.totalResultPages = 0;
+        } else {
+            this.taskResult.totalResultItems = Number(
+                (await searchedHandle.evaluate((el) => el.textContent))
+                    ?.replace('.', '')
+                    .replace('+', '')
+                    .trim()
+                    .split(' ')[0]
+            );
+
+            if (this.taskResult.totalResultItems >= 40) {
+                await page.waitForFunction(() => {
+                    return (
+                        document.querySelectorAll('.rd-page--static').length ===
+                        2
+                    );
+                });
+                const pages = await page.$$('.rd-page--page');
+                this.taskResult.totalResultPages = Number(
+                    (
+                        await pages[pages.length - 1].evaluate(
+                            (el) => el.textContent
+                        )
+                    )?.trim()
+                );
+            } else {
+                this.taskResult.totalResultPages = 1;
+            }
+        }
     }
+    async nextOrPrevPage(toNext: boolean = true) {
+        const currentPage = await this.getCurrentPage();
+        const page = this.mainPage;
+        await page.waitForFunction(
+            () =>
+                document.querySelectorAll('button.rd-page--static').length === 2
+        );
+        if (toNext) {
+            await page.locator('button.rd-page--static:last-child').click();
+        } else {
+            await page.locator('button.rd-page--static:first-child').click();
+        }
+        const targetPage = currentPage + (toNext ? 1 : -1);
+        await page.waitForFunction(
+            (targetPage: number) => {
+                return (
+                    Number(
+                        document
+                            .querySelector('span.rd-page--current')
+                            ?.textContent?.trim()
+                    ) === targetPage
+                );
+            },
+            {},
+            targetPage
+        );
+        return targetPage;
+    }
+    async getCurrentPage() {
+        const page = this.mainPage;
+        return Number(
+            (
+                await page
+                    .locator('span.rd-page--current')
+                    .map((el) => el.textContent)
+                    .wait()
+            )?.trim()
+        );
+    }
+    async exploreSERP() {
+        const page = this.mainPage;
+        const { task } = this;
+        if (this.taskResult.totalResultPages) {
+            let currentPage = 1;
+            while (
+                currentPage < this.taskResult.totalResultPages &&
+                currentPage <
+                    task.productAction.searchCriteria.numberPagesToSearch
+            ) {
+                const currentPageSpanValue = await this.getCurrentPage();
+                if (currentPageSpanValue !== currentPage) {
+                    console.error(
+                        `current page is incorrect=> ${currentPage} expected but ${currentPageSpanValue}. Will navigate to the target page`
+                    );
+                    this.nextOrPrevPage(currentPageSpanValue < currentPage);
+                    continue;
+                }
+                await page.waitForFunction(
+                    () =>
+                        document.querySelectorAll('article.product').length > 0
+                );
+                const allProducts = await page.$$('article.product');
+                debugLog(`kk-346 allProducts: ${allProducts.length}`);
+                // Explore random products
+                let randomProductsToVisit: IProductAction[] = [];
+                if (
+                    currentPage <
+                    task.productAction.randomProductVisitsPerPage.length
+                )
+                    randomProductsToVisit =
+                        task.productAction.randomProductVisitsPerPage[
+                            currentPage
+                        ];
+                let randomProductIndex = 0;
+
+                for (
+                    let productIndex = 0;
+                    productIndex < allProducts.length;
+                    productIndex++
+                ) {
+                    const product = allProducts[productIndex];
+                    // TODO: if this product is main product?
+                    await product.hover();
+                    await sleep(300);
+                    const productUrl = (
+                        await (
+                            await product.waitForSelector('a')
+                        )?.evaluate((el) => {
+                            return el.getAttribute('href');
+                        })
+                    )?.trim();
+                    const splitedProductUrl: string[] =
+                        productUrl?.split('/') || [];
+                    if (
+                        splitedProductUrl?.length < 3 ||
+                        splitedProductUrl[0] !== '' ||
+                        splitedProductUrl[1] !== 'product'
+                    ) {
+                        console.error(
+                            `Invalid product url: ${splitedProductUrl} - ${productUrl} - ${productIndex}-index item on ${currentPage}-index page`
+                        );
+                    } else {
+                        const productId = splitedProductUrl[2];
+                        const isAdvertisedProduct =
+                            (await product.$(
+                                'aside.product-badge-container'
+                            )) !== null;
+                        isAdvertisedProduct &&
+                            debugLog(
+                                `kk-414 advertised product: ${productIndex}-index item on ${currentPage}-index page`
+                            );
+                        const isMainProduct =
+                            task.productAction.productId === productId ||
+                            task.productAction.variationIds?.includes(
+                                productId
+                            );
+                        if (isAdvertisedProduct) {
+                            if (isMainProduct) {
+                                this.taskResult.isFoundAdvertised = true;
+                            }
+                            continue;
+                        }
+                        if (isMainProduct) {
+                            debugLog(`kk-427 mainProductIndex:${productIndex}`);
+                            this.taskResult.foundOnPage = currentPage;
+                            this.taskResult.foundId = productId;
+                            this.taskResult.isFoundVariationId =
+                                task.productAction.productId !== productId;
+                            this.taskResult.foundBySearch = true;
+                            /* this.visitProductAndDoHumanActivity(
+                                product,
+                                this.task.productAction
+                            ); */
+                        }
+
+                        /* if (
+                            Math.random() <
+                            (randomProductsToVisit.length -
+                                randomProductIndex) /
+                                (allProducts.length - productIndex)
+                        ) {
+                            this.visitProductAndDoHumanActivity(
+                                product,
+                                randomProductsToVisit[randomProductIndex]
+                            );
+                            randomProductIndex++;
+                        } */
+                    }
+                }
+                currentPage = await this.nextOrPrevPage();
+            }
+        }
+        /* if (!taskResult.isMainProductFound && task.getProductInfoonNotFound) {
+            const url = ' http://kaufland.de/product/ ' + task.productId;
+            const info = visitProductByUrl(url); // no human activity but only info
+            taskResult.mainInfo = info;
+        } */
+    }
+    /* async visitProductAndDoHumanActivity(
+        product: ElementHandle,
+        productAction: IProductAction
+    ): IProductInfo {
+        const taskResult = this.taskResult;
+    } */
     async handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
         // Init Properties
         this.task = context.task;
         this.taskResult = {
             isFoundVariationId: false,
             foundBySearch: false,
+            isFoundAdvertised: false,
 
             cart: {
                 itemsCountBefore: 0,
@@ -284,15 +498,10 @@ export class KauflandBot implements IBot {
         // Actions
         this.hideCookieAlertIfItAppears();
         await this.checkProfile();
-        this.taskResult.cart.itemsCountBefore = await this.getCartCount();
-        console.log('Cart Count:', this.taskResult.cart.itemsCountBefore);
+        // this.taskResult.cart.itemsCountBefore = await this.getCartCount(); //TEST:
+        infoLog('Cart Count:' + this.taskResult.cart.itemsCountBefore);
         await this.inputSearchFilters();
-        await this.validateInputFilers();
-
-        // TEST: Wait Long Time
-        await this.mainPage.waitForNavigation({
-            timeout: 5 * 60 * 1000 /* 5 mins */,
-        });
-        return {} as any;
+        await this.exploreSERP();
+        return this.taskResult;
     }
 }
