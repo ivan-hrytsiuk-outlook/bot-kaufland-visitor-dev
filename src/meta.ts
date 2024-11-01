@@ -1,4 +1,11 @@
-import { Browser, ElementHandle, Locator, Page, TimeoutError } from 'puppeteer';
+import {
+    Browser,
+    ElementHandle,
+    Locator,
+    Page,
+    Target,
+    TimeoutError,
+} from 'puppeteer';
 
 export interface IProductInfo {
     // information about target product
@@ -99,7 +106,8 @@ async function waitSkeletonLoading(page: Page) {
     await page.waitForFunction(
         () =>
             document.querySelectorAll('.rd-skeleton, .rd-placeholder')
-                .length === 0
+                .length === 0 /* &&
+            document.querySelectorAll('.rd-cart-widget__button').length > 0*/
     );
 }
 
@@ -120,15 +128,26 @@ function hideCookieAlertIfItAppears(mainPage: Page) {
         .catch((error) => {
             if (error instanceof TimeoutError)
                 infoLog('Cookie alert is not displayed');
-            else console.error('Unknown error: ' + error);
+            else errorLog('Unknown error: ' + error);
         });
 }
-
+const currentTime = () => {
+    const padL = (nr: any, len = 2, chr = `0`) => `${nr}`.padStart(2, chr);
+    const dt = new Date();
+    return `${padL(dt.getMonth() + 1)}/${padL(
+        dt.getDate()
+    )}/${dt.getFullYear()} ${padL(dt.getHours())}:${padL(
+        dt.getMinutes()
+    )}:${padL(dt.getSeconds())}`;
+};
 const debugLog = (...args: any[]) =>
-    console.log('\x1b[34m', ...args, '\x1b[0m'); // blue log
+    console.log(currentTime(), '\x1b[34m', ...args, '\x1b[0m'); // blue log
 
 const infoLog = (...args: any[]) =>
-    console.info('\x1b[32m', ...args, '\x1b[0m'); // green log
+    console.info(currentTime(), '\x1b[32m', ...args, '\x1b[0m'); // green log
+
+const errorLog = (...args: any[]) =>
+    console.error(currentTime(), '\x1b[31m', ...args, '\x1b[0m'); // green log
 
 const sleep = (delay: number) =>
     new Promise((resolve) => setTimeout(resolve, delay));
@@ -156,7 +175,7 @@ export class KauflandBot implements IBot {
         const isLoggedIn = tagName === 'button';
         if (this.task.isAnonymous) {
             if (isLoggedIn) {
-                console.error(
+                errorLog(
                     'Profie Mismatch:  Anonymous user is expected but profile is logged in'
                 );
             } else {
@@ -164,7 +183,7 @@ export class KauflandBot implements IBot {
             }
         } else {
             if (!isLoggedIn) {
-                console.error('profile Mismatch:  Profile should be logged in');
+                errorLog('profile Mismatch:  Profile should be logged in');
             } else {
                 infoLog('Profile is logged in');
             }
@@ -189,7 +208,7 @@ export class KauflandBot implements IBot {
                 (el) => el.textContent
             );
             if (textContent === null) {
-                console.error('TextContent of cart article should not be null');
+                errorLog('TextContent of cart article should not be null');
             } else {
                 totalCount = Number(
                     textContent
@@ -215,7 +234,7 @@ export class KauflandBot implements IBot {
                         !productId.startsWith('/product/') ||
                         productId.trim().split('/').length < 2
                     ) {
-                        console.error(
+                        errorLog(
                             "getCartStatus:Ln208=> Invalid product link. Couldn't get productId",
                             productId
                         );
@@ -236,7 +255,9 @@ export class KauflandBot implements IBot {
         const searchInputHandle = await mainPage
             .locator('input.rh-search__input')
             .waitHandle();
-        await searchInputHandle.type(keyword);
+        await searchInputHandle.type(keyword, {
+            delay: Math.random() * 300 + 300,
+        });
         await searchInputHandle.press('Enter');
         infoLog('search input is filled and entered');
 
@@ -254,9 +275,13 @@ export class KauflandBot implements IBot {
 
             // Fill values into the elements
             if (minPrice !== undefined)
-                await elements[0].type(minPrice.toString());
+                await elements[0].type(minPrice.toString(), {
+                    delay: Math.random() * 300 + 300,
+                });
             if (maxPrice !== undefined)
-                await elements[1].type(maxPrice.toString());
+                await elements[1].type(maxPrice.toString(), {
+                    delay: Math.random() * 300 + 300,
+                });
             await elements[1].press('Enter');
         }
 
@@ -268,7 +293,7 @@ export class KauflandBot implements IBot {
         if (inputedSearchFilter === keyword)
             infoLog(`${keyword} is inputed to search filter`);
         else {
-            console.error(
+            errorLog(
                 `${keyword} is NOT inputed to search filter: ` +
                     inputedSearchFilter
             );
@@ -284,7 +309,7 @@ export class KauflandBot implements IBot {
             if (minPrice === Number(inputedMinValueFilter)) {
                 infoLog(`${minPrice} is inputed to search filter`);
             } else {
-                console.error(
+                errorLog(
                     `${minPrice} is NOT inputed to search filter: ` +
                         inputedMinValueFilter
                 );
@@ -301,7 +326,7 @@ export class KauflandBot implements IBot {
             if (maxPrice === Number(inputedMaxValueFilter)) {
                 infoLog(`${maxPrice} is inputed to search filter`);
             } else {
-                console.error(
+                errorLog(
                     `${maxPrice} is NOT inputed to search filter: ` +
                         inputedMaxValueFilter
                 );
@@ -320,7 +345,7 @@ export class KauflandBot implements IBot {
                 el.classList.contains('empty-search__notification')
             )
         ) {
-            console.error('Any matching search results');
+            errorLog('Any matching search results');
             taskResult.totalResultItems = 0;
             taskResult.totalResultPages = 0;
         } else {
@@ -400,29 +425,43 @@ export class KauflandBot implements IBot {
         selector: string,
         numberOfMovement: number
     ) {
-        const elem = await productPage.locator(selector).waitHandle();
-        await elem.hover();
-        const boundingBox = await elem.boundingBox();
-        if (boundingBox) {
-            for (let i = 0; i < numberOfMovement; i++) {
-                await productPage.mouse.move(
-                    boundingBox.x + Math.random() * boundingBox.width,
-                    boundingBox.y + Math.random() * boundingBox.height
-                );
-                await sleep(Math.floor(Math.random() * 200 + 200));
+        const elem = await productPage.waitForSelector(selector, {
+            visible: true,
+        });
+        if (elem === null) {
+            errorLog(
+                `moveAroundElementBoxOnProductPage:Ln423=> Invalid selector(${selector}) element`
+            );
+        } else {
+            await elem.hover();
+            const boundingBox = await elem.boundingBox();
+            if (boundingBox) {
+                for (let i = 0; i < numberOfMovement; i++) {
+                    await productPage.mouse.move(
+                        boundingBox.x + Math.random() * boundingBox.width,
+                        boundingBox.y + Math.random() * boundingBox.height
+                    );
+                    await sleep(Math.floor(Math.random() * 300 + 400));
+                }
             }
         }
     }
 
-    async getProductInfo(productPage: Page, productInfo: IProductInfo) {
-        /* const productInfo: IProductInfo = {
-            shopName: string;
-    shopUrl: string;
-    shopId: string;
-    variations?: { id: string }[]; // list of variation product IDS found on product's page
-    //TODO: shopId, shopUrl
+    async getProductInfo(
+        productPage: Page,
+        productId: string,
+        productUrl: string
+    ) {
+        const productInfo: IProductInfo = {
+            productId,
+            productUrl,
+            shopName: '',
+            shopUrl: '',
+            shopId: '',
+            price: 0,
+            title: '',
         };
-        return productInfo; */
+
         await waitSkeletonLoading(productPage);
         const title =
             (await productPage
@@ -430,7 +469,7 @@ export class KauflandBot implements IBot {
                 .map((el) => el.textContent)
                 .wait()) || '';
         if (title === '') {
-            console.error(
+            errorLog(
                 `getProductInfo=> Product(ID:${productInfo.productId}, URL:${productInfo.productUrl}) Title cannot be null`
             );
         }
@@ -458,7 +497,7 @@ export class KauflandBot implements IBot {
                         )
                     )?.trim() || '';
                 if (!dataPW.startsWith('variant-')) {
-                    console.error(
+                    errorLog(
                         `getProductInfo=> Invalid variant attribute: ${dataPW}`
                     );
                 } else {
@@ -467,15 +506,60 @@ export class KauflandBot implements IBot {
             })
         );
         productInfo.variations = variations;
-    }
 
+        // TODO: shopId, shopUrl, shopName will be later.
+        return productInfo;
+    }
+    async visitAndDoHumanActivity(
+        productATag: ElementHandle,
+        productId: string,
+        foundOnPage: number,
+        productAction: IProductAction
+    ): Promise<
+        [productPage: Page, productActionResult: IProductActionsResult]
+    > {
+        const [productPage] = await Promise.all([
+            new Promise<Page>((resolve) => {
+                const handleTarget = async (target: any) => {
+                    if (target.type() === 'page') {
+                        this.browser.off('targetcreated', handleTarget);
+                        const page = await target.page();
+                        if (page === null) {
+                            errorLog(
+                                'exploreSERP:Ln686=> Invalid page created'
+                            );
+                        } else resolve(page);
+                    }
+                };
+                this.browser.on('targetcreated', handleTarget);
+            }),
+            productATag.click({ button: 'middle' }),
+        ]);
+        await setPageViewPort(productPage);
+        await productPage.bringToFront();
+        await waitSkeletonLoading(productPage);
+
+        return [
+            productPage,
+            await this.doProductAction(
+                productPage,
+                productId,
+                foundOnPage,
+                productAction
+            ),
+        ];
+    }
     async doProductAction(
         productPage: Page,
-        productAction: IProductAction,
-        productActionResult: IProductActionsResult
-    ) {
+        productId: string,
+        foundOnPage: number,
+        productAction: IProductAction
+    ): Promise<IProductActionsResult> {
+        const productActionResult: IProductActionsResult = {
+            productId,
+            foundOnPage,
+        };
         try {
-            await waitSkeletonLoading(productPage);
             const { addToCart, minTimeOnPage } = productAction;
             const startTime = performance.now();
             let currentTime;
@@ -485,9 +569,11 @@ export class KauflandBot implements IBot {
                 const randomAction = Math.floor(
                     Math.random() * RANDOM_ACTION_COUNT
                 );
-                debugLog(`Ln474=> randomAction:${randomAction} started`);
                 switch (randomAction) {
                     case 0:
+                        infoLog(
+                            `Mouse is moving randomly around short description text...`
+                        );
                         await this.moveAroundElementBoxOnProductPage(
                             productPage,
                             '.description-teaser__description-text',
@@ -495,6 +581,9 @@ export class KauflandBot implements IBot {
                         );
                         break;
                     case 1:
+                        infoLog(
+                            `Mouse is moving randomly around product picture...`
+                        );
                         await this.moveAroundElementBoxOnProductPage(
                             productPage,
                             'picture.product-picture',
@@ -502,6 +591,9 @@ export class KauflandBot implements IBot {
                         );
                         break;
                     case 2:
+                        infoLog(
+                            `Mouse is moving randomly around long description...`
+                        );
                         await this.moveAroundElementBoxOnProductPage(
                             productPage,
                             '.rd-product-description__top-accordion-content-description',
@@ -509,35 +601,88 @@ export class KauflandBot implements IBot {
                         );
                         break;
                     default:
-                        console.error('Invalid random product page action');
+                        errorLog('Invalid random product page action');
                 }
-                debugLog(`Ln474=> randomAction:${randomAction} stopped`);
             } while (currentTime - startTime < minTimeOnPage * 1000);
             productActionResult.timeOnPage = Math.floor(
                 (currentTime - startTime) / 1000
             );
-            debugLog(
-                `doProductAction:508=> allRandomActions Finished ${productActionResult.timeOnPage}s delayed`
-            );
-
+            const beforeStatus: CartStatus = await this.getCartStatus();
+            productActionResult.addToCart = {
+                before: beforeStatus.productIds.includes(
+                    productActionResult.productId
+                ),
+                after: false,
+            };
+            await productPage.bringToFront();
             if (addToCart) {
-                await productPage.locator('.rd-add-to-cart__button').click();
-                infoLog(
-                    `${productActionResult.productId} cart button is clicked`
+                const cartButton = await productPage.waitForSelector(
+                    '.rd-add-to-cart__button',
+                    {
+                        visible: true,
+                    }
                 );
-                await productPage
-                    .locator('.add-to-cart-overlay__close')
-                    .click();
-                infoLog(`${productActionResult.productId} is added to cart`);
+                if (cartButton === null) {
+                    errorLog(
+                        `doProductAction:Ln617=> cannot find add-to-cart-button`
+                    );
+                } else {
+                    do {
+                        await cartButton.click();
+                        debugLog('doProductAction:Ln623=> body clicked');
+                        await sleep(1000);
+                        debugLog('doProductAction:Ln623=> body slept');
+                    } while (
+                        (await productPage.evaluate(
+                            () =>
+                                document.querySelectorAll(
+                                    '.add-to-cart-overlay__body'
+                                ).length
+                        )) == 0
+                    );
+                    await productPage.waitForSelector(
+                        '.add-to-cart-overlay__body',
+                        { visible: true }
+                    );
+                    debugLog('doProductAction:Ln623=> body shown');
+                    await sleep(Math.random() * 1000 + 1000);
+                    await productPage
+                        .locator('.add-to-cart-overlay__close')
+                        .click();
+                    await sleep(Math.random() * 1000 + 1000);
+                }
+            }
+
+            const afterStatus: CartStatus = await this.getCartStatus();
+            productActionResult.addToCart.after =
+                afterStatus.productIds.includes(productActionResult.productId);
+            if (addToCart) {
+                if (afterStatus.totalCount > beforeStatus.totalCount) {
+                    infoLog(
+                        `${productActionResult.productId} is added to cart(before:${beforeStatus.totalCount}, after:${afterStatus.totalCount})`
+                    );
+                } else {
+                    errorLog(
+                        `${productActionResult.productId} should be added to cart but NOT added!`
+                    );
+                }
             }
         } catch (error) {
             if (error instanceof Error) {
-                console.error('doProductAction=>', error);
+                errorLog(
+                    `doProductAction=>productId: ${productId}, foundOnPage:${foundOnPage}`,
+                    error
+                );
                 productActionResult.error = error.toString();
             } else {
-                console.error('doProductAction=> Unknown error:', error);
+                errorLog(
+                    `doProductAction=>productId: ${productId}, foundOnPage:${foundOnPage} Unknown error:`,
+                    error
+                );
+                productActionResult.error = JSON.stringify(error, null, 2);
             }
         }
+        return productActionResult;
     }
 
     async exploreSERP(mainPage: Page) {
@@ -545,15 +690,17 @@ export class KauflandBot implements IBot {
         if (taskResult.totalResultPages) {
             let currentPageNumber = 1;
             while (
-                currentPageNumber < taskResult.totalResultPages &&
-                currentPageNumber <
+                currentPageNumber <=
+                Math.min(
+                    taskResult.totalResultPages,
                     task.productAction.searchCriteria.numberPagesToSearch
+                )
             ) {
                 const currentPageSpanValue = await this.getCurrentPageNumber(
                     mainPage
                 );
                 if (currentPageSpanValue !== currentPageNumber) {
-                    console.error(
+                    errorLog(
                         `current page is incorrect=> ${currentPageNumber} expected but ${currentPageSpanValue}. Will navigate to the target page`
                     );
                     await this.nextOrPrevPage(
@@ -567,16 +714,18 @@ export class KauflandBot implements IBot {
                         document.querySelectorAll('article.product').length > 0
                 );
                 const allProducts = await mainPage.$$('article.product');
-                debugLog(`Ln346 allProducts: ${allProducts.length}`);
+                infoLog(
+                    `Searching ${currentPageNumber}th page(${allProducts.length} products)...`
+                );
                 // Explore random products
                 let randomProductActionsToVisit: IProductAction[] = [];
                 if (
-                    currentPageNumber <
+                    currentPageNumber <=
                     task.productAction.randomProductVisitsPerPage.length
                 )
                     randomProductActionsToVisit =
                         task.productAction.randomProductVisitsPerPage[
-                            currentPageNumber
+                            currentPageNumber - 1
                         ];
                 let randomProductIndex = 0;
 
@@ -587,11 +736,17 @@ export class KauflandBot implements IBot {
                 ) {
                     const product = allProducts[productIndex];
                     await product.hover();
-                    // await sleep(300); // TEST
+                    //TEST await sleep(Math.random() * 500 + 500);
                     const productATag = await product.waitForSelector('a');
+                    if (productATag === null) {
+                        errorLog(
+                            `exploreSERP:Ln625=> No validate product link of ${productIndex}-index product of ${currentPageNumber}th page`
+                        );
+                        continue;
+                    }
                     const productUrl =
                         (
-                            await productATag?.evaluate((el) => {
+                            await productATag.evaluate((el) => {
                                 return el.getAttribute('href');
                             })
                         )?.trim() || '';
@@ -602,18 +757,18 @@ export class KauflandBot implements IBot {
                         splitedProductUrl[0] !== '' ||
                         splitedProductUrl[1] !== 'product'
                     ) {
-                        console.error(
+                        errorLog(
                             `Invalid product url: ${splitedProductUrl} - ${productUrl} - ${productIndex}-index item on ${currentPageNumber}-index page`
                         );
                     } else {
                         const productId = splitedProductUrl[2];
                         const isAdvertisedProduct =
                             (await product.$(
-                                'aside.product-badge-container'
+                                'div.product__sponsored-ad-label'
                             )) !== null;
                         isAdvertisedProduct &&
-                            debugLog(
-                                `Ln414 advertised product: ${productIndex}-index item on ${currentPageNumber}-index page`
+                            infoLog(
+                                `Advertised product is found at ${productIndex}-index item on ${currentPageNumber}-index page. It won't be visited`
                             );
                         const isMainProduct =
                             task.productAction.productId === productId ||
@@ -627,81 +782,88 @@ export class KauflandBot implements IBot {
                             continue;
                         }
                         if (isMainProduct) {
-                            debugLog(`Ln427 mainProductIndex:${productIndex}`);
+                            infoLog(
+                                `MainProduct is founded at ${productIndex}-index on ${currentPageNumber}th page`
+                            );
                             taskResult.mainProductPageActions.foundOnPage =
                                 taskResult.foundOnPage = currentPageNumber;
                             taskResult.foundId = productId;
                             taskResult.isFoundVariationId =
                                 task.productAction.productId !== productId;
                             taskResult.foundBySearch = true;
-                            // page will be updated. TODO: I should discuss about it.
-                            // //<--- Option1 - Click the product
-                            // productATag?.click();
-                            // const productPage = page; //TEST:
-                            // //--->
+                            infoLog(
+                                `MainProduct(id:${productId}) is visiting...`
+                            );
+                            const [productPage, productActionResult] =
+                                await this.visitAndDoHumanActivity(
+                                    productATag,
+                                    productId,
+                                    currentPageNumber,
+                                    task.productAction
+                                );
+                            infoLog(
+                                `MainProduct(id:${productId}) is visited.\r\nAction: ${JSON.stringify(
+                                    task.productAction,
+                                    null,
+                                    2
+                                )}\r\nActionResult:${JSON.stringify(
+                                    productActionResult,
+                                    null,
+                                    2
+                                )}`
+                            );
 
-                            // <--- Option2 - Open new Page
-                            const productPage = await this.browser.newPage();
-                            await setPageViewPort(productPage);
-                            debugLog(
-                                'Ln623=> main product pageUrl:',
-                                this.getBaseUrl() + productUrl
-                            );
-                            await productPage.goto(
-                                this.getBaseUrl() + productUrl
-                            );
-                            // --->
-                            taskResult.mainProductPageActions.productId =
-                                productId;
-                            await this.doProductAction(
+                            taskResult.productInfo = await this.getProductInfo(
                                 productPage,
-                                task.productAction,
-                                taskResult.mainProductPageActions
-                            );
-                            const productInfo: IProductInfo = {
                                 productId,
-                                productUrl,
-                                shopName: '',
-                                shopUrl: '',
-                                shopId: '',
-                                price: 0,
-                                title: '',
-                            };
-                            await this.getProductInfo(productPage, productInfo);
-                            taskResult.productInfo = productInfo;
-                            // await productPage.goBack(); // Option1
-                            await productPage.close(); // Option2
+                                productUrl
+                            );
+                            taskResult.mainProductPageActions =
+                                productActionResult;
+                            await mainPage.bringToFront();
+                            await productPage.close();
+                            infoLog(
+                                `MainProduct Information is scrapped successfully.\r\nProduct Info:${JSON.stringify(
+                                    taskResult.productInfo,
+                                    null,
+                                    2
+                                )}`
+                            );
                         } else if (
                             Math.random() <
                             (randomProductActionsToVisit.length -
                                 randomProductIndex) /
                                 (allProducts.length - productIndex)
                         ) {
-                            // // <--- Option1 - Click the product
-                            // productATag?.click();
-                            // const productPage = page;
-                            // // --->
-
-                            // <--- Option2 - Open new Page
-                            const productPage = await this.browser.newPage();
-                            await setPageViewPort(productPage);
-                            await productPage.goto(
-                                this.getBaseUrl() + productUrl
+                            infoLog(
+                                `RandomProduct(id: ${productId} at ${productIndex}-index on ${currentPageNumber}th page) is visiting...`
                             );
-                            // --->
-                            const productActionResult: IProductActionsResult = {
-                                productId,
-                                foundOnPage: currentPageNumber,
-                            };
-                            await this.doProductAction(
-                                productPage,
-                                randomProductActionsToVisit[randomProductIndex],
-                                productActionResult
+                            const [productPage, productActionResult] =
+                                await this.visitAndDoHumanActivity(
+                                    productATag,
+                                    productId,
+                                    currentPageNumber,
+                                    randomProductActionsToVisit[
+                                        randomProductIndex
+                                    ]
+                                );
+                            await mainPage.bringToFront();
+                            await productPage.close();
+                            infoLog(
+                                `RandomProduct(id: ${productId} at ${productIndex}-index on ${currentPageNumber}th page) is visited.\r\nAction: ${JSON.stringify(
+                                    randomProductActionsToVisit[
+                                        randomProductIndex
+                                    ],
+                                    null,
+                                    2
+                                )}\r\nActionResult:${JSON.stringify(
+                                    productActionResult,
+                                    null,
+                                    2
+                                )}`
                             );
                             randomProductIndex++;
                             taskResult.otherProducts.push(productActionResult);
-                            // await productPage.goBack(); // Option1
-                            await productPage.close(); // Option2
                         }
                     }
                 }
@@ -714,16 +876,11 @@ export class KauflandBot implements IBot {
             const productPage = await this.browser.newPage();
             await setPageViewPort(productPage);
             await productPage.goto(productUrl);
-            taskResult.productInfo = {
+            taskResult.productInfo = await this.getProductInfo(
+                productPage,
                 productId,
-                productUrl,
-                shopName: '',
-                shopUrl: '',
-                shopId: '',
-                price: 0,
-                title: '',
-            };
-            await this.getProductInfo(productPage, taskResult.productInfo);
+                productUrl
+            );
             productPage.close();
         }
     }
@@ -746,74 +903,49 @@ export class KauflandBot implements IBot {
             otherProducts: [],
         };
         this.browser = context.browser;
-        /* const mainPage = await this.browser.newPage();
-        await mainPage?.goto(this.getBaseUrl());
-        await setPageViewPort(mainPage);
+        try {
+            const mainPage = await this.browser.newPage();
+            await mainPage?.goto(this.getBaseUrl());
+            await setPageViewPort(mainPage);
 
-        // Actions
-        hideCookieAlertIfItAppears(mainPage);
-        await this.checkProfile(mainPage);
+            // Actions
+            hideCookieAlertIfItAppears(mainPage);
+            await this.checkProfile(mainPage);
 
-        const cartStatusBefore: CartStatus = await this.getCartStatus();
-        infoLog('Cart Status:', cartStatusBefore);
+            const cartStatusBefore: CartStatus = await this.getCartStatus();
+            infoLog('Cart Status(Before):', cartStatusBefore);
 
-        await this.inputSearchFilters(mainPage);
-        await this.exploreSERP(mainPage);
+            await this.inputSearchFilters(mainPage);
+            await this.exploreSERP(mainPage);
 
-        const cartStatusAfter: CartStatus = await this.getCartStatus();
-        infoLog('Cart Status:', cartStatusAfter);
+            const cartStatusAfter: CartStatus = await this.getCartStatus();
+            infoLog('Cart Status(After):', cartStatusAfter);
 
-        this.taskResult.cart.itemsCountBefore = cartStatusBefore.totalCount;
-        this.taskResult.cart.itemsCountAfter = cartStatusAfter.totalCount;
-        this.taskResult.mainProductPageActions.addToCart = {
-            before: cartStatusBefore.productIds.includes(
-                this.task.productAction.productId
-            ),
-            after: cartStatusAfter.productIds.includes(
-                this.task.productAction.productId
-            ),
-        };
-        this.taskResult.otherProducts.forEach(
-            (otherProduct) =>
-                (otherProduct.addToCart = {
-                    before: cartStatusBefore.productIds.includes(
-                        otherProduct.productId
-                    ),
-                    after: cartStatusAfter.productIds.includes(
-                        otherProduct.productId
-                    ),
-                })
-        );
-        await mainPage.close(); */
-
-        // GetProductInfo Test
-        const productId = '359272830';
-        const productUrl = `${this.getBaseUrl()}/product/${productId}`;
-        const productPage = await this.browser.newPage();
-        productPage.setDefaultTimeout(5000);
-        await setPageViewPort(productPage);
-        await productPage.goto(productUrl);
-        const productInfo: IProductInfo = {
-            productId,
-            productUrl,
-            shopName: '',
-            shopUrl: '',
-            shopId: '',
-            price: 0,
-            title: '',
-        };
-        await this.doProductAction(
-            productPage,
-            {
-                addToCart: true,
-                minTimeOnPage: 5,
-            },
-            { productId }
-        );
-        infoLog(productInfo);
-        await productPage.waitForNavigation();
-        await productPage.close();
-
+            this.taskResult.cart.itemsCountBefore = cartStatusBefore.totalCount;
+            this.taskResult.cart.itemsCountAfter = cartStatusAfter.totalCount;
+            this.taskResult.mainProductPageActions.addToCart = {
+                before: cartStatusBefore.productIds.includes(
+                    this.task.productAction.productId
+                ),
+                after: cartStatusAfter.productIds.includes(
+                    this.task.productAction.productId
+                ),
+            };
+            this.taskResult.otherProducts.forEach(
+                (otherProduct) =>
+                    (otherProduct.addToCart = {
+                        before: cartStatusBefore.productIds.includes(
+                            otherProduct.productId
+                        ),
+                        after: cartStatusAfter.productIds.includes(
+                            otherProduct.productId
+                        ),
+                    })
+            );
+            await mainPage.close();
+        } catch (error) {
+            errorLog('handle():Ln949=>', error);
+        }
         return this.taskResult;
     }
 }
