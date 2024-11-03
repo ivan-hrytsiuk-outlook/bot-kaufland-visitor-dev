@@ -6,6 +6,7 @@ import {
     Target,
     TimeoutError,
 } from 'puppeteer';
+import fs from 'fs';
 
 export interface IProductInfo {
     // information about target product
@@ -101,13 +102,26 @@ async function setPageViewPort(page: Page) {
         isMobile: false,
     });
 }
-
+async function waitForPageInitLoad(page: Page) {
+    const selector = await Promise.race([
+        page.waitForSelector('.rh-main__logo'),
+        page.waitForSelector('.main-wrapper>.main-content>.zone-name-title'),
+    ]);
+    if (selector === null) {
+        errorLog('waitForPageInitLoad:Ln111=> Invalid selector');
+    } else {
+        const className = await selector.evaluate((el) => el.className);
+        if (className.includes('zone-name-title')) {
+            infoLog(`Anti-bot detected: ${page.url()}`);
+            await page.reload();
+        }
+    }
+}
 async function waitSkeletonLoading(page: Page) {
     await page.waitForFunction(
         () =>
             document.querySelectorAll('.rd-skeleton, .rd-placeholder')
-                .length === 0 /* &&
-            document.querySelectorAll('.rd-cart-widget__button').length > 0*/
+                .length === 0
     );
 }
 
@@ -125,20 +139,59 @@ function hideCookieAlertIfItAppears(mainPage: Page) {
             await acceptBtn.click();
             infoLog('Cookie Accept button is clicked');
         })
-        .catch((error) => {
+        .catch(async (error) => {
             if (error instanceof TimeoutError)
                 infoLog('Cookie alert is not displayed');
             else errorLog('Unknown error: ' + error);
+            await saveScreenshot(mainPage);
+            await savePageContent(mainPage);
         });
 }
+async function saveScreenshot(page: Page, suffix: string = '') {
+    try {
+        const dt = new Date();
+        const filename =
+            [dt.getHours(), dt.getMinutes(), dt.getSeconds()]
+                .map((val) => val.toString().padStart(2, '0'))
+                .join('') +
+            suffix +
+            '.png';
+        debugLog(`screenshot(${page.url()}) is saved to ${filename}`);
+        await page.screenshot({ path: filename, fullPage: true });
+    } catch (error) {
+        errorLog('saveScreenshot:Ln146=>', error);
+    }
+}
+async function savePageContent(page: Page, suffix: string = '') {
+    try {
+        const dt = new Date();
+        const filename =
+            [dt.getHours(), dt.getMinutes(), dt.getSeconds()]
+                .map((val) => val.toString().padStart(2, '0'))
+                .join('') +
+            '_' +
+            dt.getMilliseconds().toString().padStart(3, '0') +
+            suffix +
+            '.html';
+        debugLog(`page content(${page.url()}) is saved to ${filename}`);
+        const content = await page.content();
+        fs.writeFileSync(filename, content);
+    } catch (error) {
+        errorLog('saveScreenshot:Ln146=>', error);
+    }
+}
 const currentTime = () => {
-    const padL = (nr: any, len = 2, chr = `0`) => `${nr}`.padStart(2, chr);
+    const padL = (nr: any, len = 2, chr = `0`) => `${nr}`.padStart(len, chr);
     const dt = new Date();
-    return `${padL(dt.getMonth() + 1)}/${padL(
-        dt.getDate()
-    )}/${dt.getFullYear()} ${padL(dt.getHours())}:${padL(
-        dt.getMinutes()
-    )}:${padL(dt.getSeconds())}`;
+    return (
+        `${padL(dt.getMonth() + 1)}/${padL(
+            dt.getDate()
+        )}/${dt.getFullYear()} ${padL(dt.getHours())}:${padL(
+            dt.getMinutes()
+        )}:${padL(dt.getSeconds())}` +
+        '.' +
+        padL(dt.getMilliseconds(), 3)
+    );
 };
 const debugLog = (...args: any[]) =>
     console.log(currentTime(), '\x1b[34m', ...args, '\x1b[0m'); // blue log
@@ -193,8 +246,9 @@ export class KauflandBot implements IBot {
     async getCartStatus(): Promise<CartStatus> {
         // Main Step4: Retrieve Cart Count: Count the products in the cart before starting.
         const cartPage = await this.browser.newPage();
-        await setPageViewPort(cartPage);
         await cartPage.goto(`${this.getBaseUrl()}/checkout/cart`);
+        await setPageViewPort(cartPage);
+        await waitForPageInitLoad(cartPage);
         await waitSkeletonLoading(cartPage);
         const cartHandle: ElementHandle = await Promise.race([
             cartPage.locator('.empty-cart').waitHandle(),
@@ -255,11 +309,8 @@ export class KauflandBot implements IBot {
         const searchInputHandle = await mainPage
             .locator('input.rh-search__input')
             .waitHandle();
-        await searchInputHandle.type(keyword, {
-            delay: Math.random() * 300 + 300,
-        });
+        await searchInputHandle.type(keyword);
         await searchInputHandle.press('Enter');
-        infoLog('search input is filled and entered');
 
         await mainPage.waitForFunction(
             () =>
@@ -275,13 +326,9 @@ export class KauflandBot implements IBot {
 
             // Fill values into the elements
             if (minPrice !== undefined)
-                await elements[0].type(minPrice.toString(), {
-                    delay: Math.random() * 300 + 300,
-                });
+                await elements[0].type(minPrice.toString());
             if (maxPrice !== undefined)
-                await elements[1].type(maxPrice.toString(), {
-                    delay: Math.random() * 300 + 300,
-                });
+                await elements[1].type(maxPrice.toString());
             await elements[1].press('Enter');
         }
 
@@ -294,8 +341,7 @@ export class KauflandBot implements IBot {
             infoLog(`${keyword} is inputed to search filter`);
         else {
             errorLog(
-                `${keyword} is NOT inputed to search filter: ` +
-                    inputedSearchFilter
+                `${keyword} is NOT inputed to search filter: ${inputedSearchFilter}`
             );
         }
 
@@ -349,23 +395,25 @@ export class KauflandBot implements IBot {
             taskResult.totalResultItems = 0;
             taskResult.totalResultPages = 0;
         } else {
-            taskResult.totalResultItems = Number(
-                (await searchedHandle.evaluate((el) => el.textContent))
-                    ?.replace('.', '')
-                    .replace('+', '')
-                    .trim()
-                    .split(' ')[0]
-            );
-
-            if (taskResult.totalResultItems >= 40) {
-                //TODO: 40 is the number of products on each page?
-                await mainPage.waitForFunction(() => {
-                    return (
-                        document.querySelectorAll('.rd-page--static').length ===
-                        2
-                    );
-                });
-                const pages = await mainPage.$$('.rd-page--page');
+            taskResult.totalResultItems =
+                Number(
+                    (await searchedHandle.evaluate((el) => el.textContent))
+                        ?.replace('.', '')
+                        .replace('+', '')
+                        .trim()
+                        .split(' ')[0]
+                ) || 1;
+            await waitSkeletonLoading(mainPage);
+            // if (taskResult.totalResultItems >= 40) {
+            //     //TODO: 40 is the number of products on each page?
+            //     await mainPage.waitForFunction(() => {
+            //         return (
+            //             document.querySelectorAll('.rd-page--static').length ===
+            //             2
+            //         );
+            //     });
+            const pages = await mainPage.$$('.rd-page--page');
+            if (pages.length) {
                 taskResult.totalResultPages = Number(
                     (
                         await pages[pages.length - 1].evaluate(
@@ -380,6 +428,10 @@ export class KauflandBot implements IBot {
     }
 
     async nextOrPrevPage(mainPage: Page, toNext: boolean = true) {
+        if (this.taskResult.totalResultPages === 1) {
+            if (toNext) return 2;
+            else return 0;
+        }
         const currentPage = await this.getCurrentPageNumber(mainPage);
         await mainPage.waitForFunction(
             () =>
@@ -410,6 +462,7 @@ export class KauflandBot implements IBot {
     }
 
     async getCurrentPageNumber(mainPage: Page) {
+        if (this.taskResult.totalResultPages === 1) return 1;
         return Number(
             (
                 await mainPage
@@ -461,8 +514,6 @@ export class KauflandBot implements IBot {
             price: 0,
             title: '',
         };
-
-        await waitSkeletonLoading(productPage);
         const title =
             (await productPage
                 .locator('.rd-title')
@@ -536,9 +587,9 @@ export class KauflandBot implements IBot {
             productATag.click({ button: 'middle' }),
         ]);
         await setPageViewPort(productPage);
+        await waitForPageInitLoad(productPage);
         await productPage.bringToFront();
         await waitSkeletonLoading(productPage);
-
         return [
             productPage,
             await this.doProductAction(
@@ -629,9 +680,7 @@ export class KauflandBot implements IBot {
                 } else {
                     do {
                         await cartButton.click();
-                        debugLog('doProductAction:Ln623=> body clicked');
-                        await sleep(1000);
-                        debugLog('doProductAction:Ln623=> body slept');
+                        await sleep(Math.random() * 1000 + 1000);
                     } while (
                         (await productPage.evaluate(
                             () =>
@@ -644,7 +693,6 @@ export class KauflandBot implements IBot {
                         '.add-to-cart-overlay__body',
                         { visible: true }
                     );
-                    debugLog('doProductAction:Ln623=> body shown');
                     await sleep(Math.random() * 1000 + 1000);
                     await productPage
                         .locator('.add-to-cart-overlay__close')
@@ -659,7 +707,7 @@ export class KauflandBot implements IBot {
             if (addToCart) {
                 if (afterStatus.totalCount > beforeStatus.totalCount) {
                     infoLog(
-                        `${productActionResult.productId} is added to cart(before:${beforeStatus.totalCount}, after:${afterStatus.totalCount})`
+                        `Product(Id: ${productActionResult.productId}) is added to cart(before:${beforeStatus.totalCount}, after:${afterStatus.totalCount})`
                     );
                 } else {
                     errorLog(
@@ -668,6 +716,8 @@ export class KauflandBot implements IBot {
                 }
             }
         } catch (error) {
+            await saveScreenshot(productPage);
+            await savePageContent(productPage);
             if (error instanceof Error) {
                 errorLog(
                     `doProductAction=>productId: ${productId}, foundOnPage:${foundOnPage}`,
@@ -874,8 +924,10 @@ export class KauflandBot implements IBot {
             const { productId } = task.productAction;
             const productUrl = `${this.getBaseUrl()}/product/${productId}`;
             const productPage = await this.browser.newPage();
-            await setPageViewPort(productPage);
             await productPage.goto(productUrl);
+            await setPageViewPort(productPage);
+            await waitForPageInitLoad(productPage);
+            await waitSkeletonLoading(productPage);
             taskResult.productInfo = await this.getProductInfo(
                 productPage,
                 productId,
@@ -886,6 +938,16 @@ export class KauflandBot implements IBot {
     }
 
     async handle(context: IBotContext): Promise<IKauflandRankingTaskResult> {
+        // setInterval(async () => {
+        //     const pages = await this.browser.pages();
+        //     debugLog('Total browser pages:', pages.length);
+        //     Promise.all([
+        //         pages.map(
+        //             async (page, index) =>
+        //                 await saveScreenshot(page, `_${index}`)
+        //         ),
+        //     ]);
+        // }, 5000);
         // Init Properties
         this.task = context.task;
         this.taskResult = {
@@ -903,11 +965,12 @@ export class KauflandBot implements IBot {
             otherProducts: [],
         };
         this.browser = context.browser;
+        const mainPage = await this.browser.newPage();
+        await mainPage?.goto(this.getBaseUrl());
+        await setPageViewPort(mainPage);
+        await waitForPageInitLoad(mainPage);
+        await waitSkeletonLoading(mainPage);
         try {
-            const mainPage = await this.browser.newPage();
-            await mainPage?.goto(this.getBaseUrl());
-            await setPageViewPort(mainPage);
-
             // Actions
             hideCookieAlertIfItAppears(mainPage);
             await this.checkProfile(mainPage);
@@ -916,6 +979,9 @@ export class KauflandBot implements IBot {
             infoLog('Cart Status(Before):', cartStatusBefore);
 
             await this.inputSearchFilters(mainPage);
+            infoLog(
+                `Total result items:${this.taskResult.totalResultItems}, total pages: ${this.taskResult.totalResultPages}`
+            );
             await this.exploreSERP(mainPage);
 
             const cartStatusAfter: CartStatus = await this.getCartStatus();
@@ -945,6 +1011,8 @@ export class KauflandBot implements IBot {
             await mainPage.close();
         } catch (error) {
             errorLog('handle():Ln949=>', error);
+            await saveScreenshot(mainPage);
+            await savePageContent(mainPage);
         }
         return this.taskResult;
     }
